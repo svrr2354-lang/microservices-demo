@@ -1,0 +1,98 @@
+diff --git a/src/frontend/handlers.go b/src/frontend/handlers.go
+index 1234567..89abcde 100644
+--- a/src/frontend/handlers.go
++++ b/src/frontend/handlers.go
+@@ -100,7 +100,10 @@ func (fe *frontendServer) homeHandler(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 
+ 	// Set ENV_PLATFORM (default to local if not set; use env var if set; otherwise detect GCP, which overrides env)_
+-	var env = os.Getenv("ENV_PLATFORM")
++	var env = r.Header.Get("X-Env-Platform")
++	if env == "" {
++		env = os.Getenv("ENV_PLATFORM")
++	}
+ 	// Only override from env variable if set + valid env
+ 	if env == "" || stringinSlice(validEnvs, env) == false {
+ 		fmt.Println("env platform is either empty or invalid")
+@@ -110,7 +113,10 @@ func (fe *frontendServer) homeHandler(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 	// Autodetect GCP
+ 	addrs, err := net.LookupHost("metadata.google.internal.")
+-	if err == nil && len(addrs) >= 0 {
++	if err == nil && len(addrs) > 0 {
+ 		log.Debugf("Detected Google metadata server: %v, setting ENV_PLATFORM to GCP.", addrs)
+ 		env = "gcp"
+ 	}
+ 
+ 	log.Debugf("ENV_PLATFORM is: %s", env)
+ 	plat = platformDetails{}
+-	plat.setPlatformDetails(strings.ToLower(env))
++	plat.setPlatformDetails(strings.ToLower(env))
++	w.Header().Set("X-Env-Platform", env)
+ }
+ 
+ func (fe *frontendServer) logoutHandler(w http.ResponseWriter, r *http.Request) {
+@@ -130,7 +136,10 @@ func (fe *frontendServer) logoutHandler(w http.ResponseWriter, r *http.Request) {
+ 	w.WriteHeader(http.StatusFound)
+ }
+ 
++func validateRedirectURL(url string) bool {
++	return strings.HasPrefix(url, "/") || strings.HasPrefix(url, "http://localhost") || strings.HasPrefix(url, "https://localhost")
++}
++
+ func (fe *frontendServer) setCurrencyHandler(w http.ResponseWriter, r *http.Request) {
+ 	log := r.Context().Value(ctxKeyLog{}).(logrus.FieldLogger)
+ 	cur := r.FormValue("currency_code")
+ 	log.WithField("curr.new", cur).WithField("curr.old", currentCurrency(r)).
+ 		Debug("setting currency")
+ 
+-	if cur != "" {
++	if cur != "" && validateRedirectURL(cur) {
+ 		http.SetCookie(w, &http.Cookie{
+ 			Name:   cookieCurrency,
+ 			Value:  cur,
+ 			MaxAge: cookieMaxAge,
+ 		})
+ 	}
+-	referer := r.Header.Get("referer")
+-	if referer == "" {
+-		referer = "/"
+-	}
+-	w.Header().Set("Location", referer)
+-	w.WriteHeader(http.StatusFound)
++	referer := r.Header.Get("referer")
++	if referer == "" || !validateRedirectURL(referer) {
++		referer = "/"
++	}
++	w.Header().Set("Location", referer)
++	w.WriteHeader(http.StatusFound)
+ }
+ 
+ // chooseAd queries for advertisements available and randomly chooses one, if
+@@ -160,7 +170,10 @@ func (fe *frontendServer) chooseAd(ctx context.Context, ctxKeys []string, log logrus
+ 	return ads[rand.Intn(len(ads))]
+ }
+ 
++func validateAdURL(url string) bool {
++	return strings.HasPrefix(url, "/") || strings.HasPrefix(url, "http://localhost") || strings.HasPrefix(url, "https://localhost")
++}
++
+ func renderHTTPError(log logrus.FieldLogger, r *http.Request, w http.ResponseWriter, err error, code int) {
+ 	log.WithField("error", err).Error("request error")
+ 	errMsg := fmt.Sprintf("%+v", err)
+ 
+ 	w.WriteHeader(code)
+ 
+-	if templateErr := templates.ExecuteTemplate(w, "error", map[string]interface{}{
++	if templateErr := templates.ExecuteTemplate(w, "error", map[string]interface{}{
+ 		"session_id":        sessionID(r),
+ 		"request_id":        r.Context().Value(ctxKeyRequestID{}),
+ 		"error":             errMsg,
+ 		"status_code":       code,
+ 		"status":            http.StatusText(code),
+ 		"deploymentDetails": getDeploymentDetails(r),
+-	}); templateErr != nil {
++	}); templateErr != nil {
+ 		log.Println(templateErr)
+ 	}
+ }
